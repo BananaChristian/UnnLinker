@@ -16,14 +16,17 @@ Parser::Parser() {}
 void Parser::parseObj(const std::string &filename)
 {
     std::ifstream file(filename, std::ios::binary);
-    if (!file)
-    {
+    if (!file) {
         std::cerr << "Failed to open file: " << filename << "\n";
         return;
     }
 
     Elf64_Ehdr header{};
     file.read(reinterpret_cast<char *>(&header), sizeof(header));
+    if (!file || file.gcount() != sizeof(header)) {
+        std::cerr << "[FATAL] Failed to read ELF header!\n";
+        return;
+    }
 
     // Verify ELF magic
     if (std::memcmp(header.e_ident, "\x7f"
@@ -33,11 +36,14 @@ void Parser::parseObj(const std::string &filename)
         std::cerr << "Not a valid ELF file!\n";
         return;
     }
-
-    // Sanity check
-    if (header.e_shoff == 0 || header.e_shnum == 0 || header.e_shstrndx >= header.e_shnum)
-    {
+    
+    // Sanity checks
+    if (header.e_shoff == 0 || header.e_shnum == 0 || header.e_shstrndx >= header.e_shnum) {
         std::cerr << "[FATAL] Invalid section header info!\n";
+        return;
+    }
+    if (header.e_shnum > 10000) {
+        std::cerr << "[FATAL] Unreasonably large number of sections: " << header.e_shnum << "\n";
         return;
     }
 
@@ -45,22 +51,36 @@ void Parser::parseObj(const std::string &filename)
     std::vector<Elf64_ShdrRaw> sections(header.e_shnum);
     file.seekg(header.e_shoff, std::ios::beg);
     file.read(reinterpret_cast<char *>(sections.data()), header.e_shnum * sizeof(Elf64_ShdrRaw));
+    if (!file || file.gcount() != header.e_shnum * sizeof(Elf64_ShdrRaw)) {
+        std::cerr << "[FATAL] Failed to read section headers!\n";
+        return;
+    }
 
     // Read section header string table
     const Elf64_ShdrRaw &shstrtab_hdr = sections[header.e_shstrndx];
+    if (shstrtab_hdr.sh_size == 0) {
+        std::cerr << "[FATAL] Section header string table is empty!\n";
+        return;
+    }
+
     std::vector<char> shstrtab_data(shstrtab_hdr.sh_size);
     file.seekg(shstrtab_hdr.sh_offset, std::ios::beg);
     file.read(shstrtab_data.data(), shstrtab_hdr.sh_size);
+    if (!file || file.gcount() != shstrtab_hdr.sh_size) {
+        std::cerr << "[FATAL] Failed to read section header string table!\n";
+        return;
+    }
 
     // Print section names
     std::cout << "\n--- Sections ---\n";
-    for (size_t i = 0; i < header.e_shnum; ++i)
-    {
+    for (size_t i = 0; i < header.e_shnum; ++i) {
         std::string name;
-        if (sections[i].sh_name < shstrtab_data.size())
+        if (sections[i].sh_name < shstrtab_data.size() && shstrtab_data[sections[i].sh_name] != '\0') {
             name = std::string(&shstrtab_data[sections[i].sh_name]);
-        else
+        } else {
             name = "<invalid>";
+            std::cerr << "Invalid section name for index " << i << ", sh_name: " << sections[i].sh_name << "\n";
+        }
         std::cout << "[" << i << "] " << name << "\n";
     }
 }
